@@ -38,3 +38,6 @@ pip-wheel-metadata/
 /target/
 **/*.rs.bk
 Cargo.lock.bk
+
+# testing files
+/fixtures/

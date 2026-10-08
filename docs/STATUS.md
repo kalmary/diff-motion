@@ -15,3 +15,5 @@
 - Updated `AGENTS.md`, `docs/PROJECT_GOAL.md`, and `docs/algorithm_prompt.md` to explicitly mandate that the solution must be a purely deterministic algorithm based entirely on optical flow separations, strictly forbidding neural networks.
 - Updated `.gitignore` to include standard Rust ignore patterns (e.g. `target/` directory).
 - Added `video_path` configuration argument (default: None) to the CLI (`--video-path`) and Python bindings to allow injecting test videos in place of the live camera stream.
+- Read `docs/CORE_ALGHORITHM.md` to understand the deterministic ego-motion and epipolar flow algorithm. Added `opencv` crate to `core` to begin implementing the pipeline.
+- Implemented initialization and Stage 1 (Ego-motion via Sparse LK + RANSAC) of the optical flow segmentation pipeline into `crates/core/src/processor.rs`.
