@@ -9,6 +9,9 @@ pub struct Params {
     pub tau_min: f32,
     pub k_sigma: f32,
     pub tau_epi: f32,
+    pub max_corners: i32,
+    pub quality_level: f64,
+    pub min_distance: f64,
 }
 
 impl Default for Params {
@@ -21,6 +24,9 @@ impl Default for Params {
             tau_min: 0.8,
             k_sigma: 4.0,
             tau_epi: 1.0,
+            max_corners: 400,
+            quality_level: 0.01,
+            min_distance: 8.0,
         }
     }
 }
@@ -42,7 +48,7 @@ pub struct Ws {
 
 impl Ws {
     pub fn new(params: &Params) -> CvResult<Self> {
-        let size = core::Size::new(params.w, params.h);
+        let _size = core::Size::new(params.w, params.h);
         
         let dis = video::DISOpticalFlow::create(video::DISOpticalFlow_PRESET_FAST)?;
         let kernel_open = imgproc::get_structuring_element(imgproc::MORPH_RECT, core::Size::new(3, 3), core::Point::new(-1, -1))?;
@@ -95,7 +101,15 @@ impl OpticalFlowProcessor {
         }
 
         let mut pts_prev = core::Vector::<core::Point2f>::new();
-        imgproc::good_features_to_track(&self.ws.prev, &mut pts_prev, 400, 0.01, 8.0, &self.ws.feat_mask, 3, false, 0.04)?;
+        features::good_features_to_track(
+            &self.ws.prev, 
+            &mut pts_prev, 
+            self.params.max_corners, 
+            self.params.quality_level, 
+            self.params.min_distance, 
+            &self.ws.feat_mask, 
+            3, false, 0.04
+        )?;
 
         if pts_prev.is_empty() {
             return Ok(Ego { h: self.ws.h_prev, f_aligned: None, ok: false });
@@ -142,7 +156,7 @@ impl OpticalFlowProcessor {
         }
 
         let mut inliers = core::Mat::default();
-        let h_mat = calib3d::find_homography(&good_prev, &good_curr, calib3d::USAC_MAGSAC, self.params.ransac_h, &mut inliers, 2000, 0.995)?;
+        let h_mat = geometry::find_homography(&good_prev, &good_curr, geometry::USAC_MAGSAC, self.params.ransac_h, &mut inliers, 2000, 0.995)?;
         
         if h_mat.empty() {
             return Ok(Ego { h: self.ws.h_prev, f_aligned: None, ok: false });
@@ -156,7 +170,291 @@ impl OpticalFlowProcessor {
             }
         }
 
-        // Keep as OK for now, fundamental matrix to be added next step.
-        Ok(Ego { h: h_arr, f_aligned: None, ok: true })
+        let inliers_data = inliers.data_typed::<u8>()?;
+        let num_inliers = inliers_data.iter().filter(|&&v| v != 0).count();
+        let parallax_fraction = 1.0 - (num_inliers as f64 / good_prev.len() as f64);
+
+        let mut f_aligned = None;
+
+        if parallax_fraction > 0.08 {
+            let mut f_inliers = core::Mat::default();
+            let f_mat = geometry::find_fundamental_mat(
+                &good_prev, &good_curr, geometry::USAC_MAGSAC, 1.0, 0.999, 1000, &mut f_inliers
+            )?;
+
+            if !f_mat.empty() && f_mat.rows() == 3 && f_mat.cols() == 3 {
+                let mut h_inv_mat = core::Mat::default();
+                core::invert(&h_mat, &mut h_inv_mat, core::DECOMP_LU)?;
+
+                let mut f_arr = [0.0; 9];
+                let mut h_inv_arr = [0.0; 9];
+                for i in 0..3 {
+                    for j in 0..3 {
+                        f_arr[i * 3 + j] = *f_mat.at_2d::<f64>(i as i32, j as i32)?;
+                        h_inv_arr[i * 3 + j] = *h_inv_mat.at_2d::<f64>(i as i32, j as i32)?;
+                    }
+                }
+
+                f_aligned = Some(mul3(&f_arr, &h_inv_arr));
+            }
+        }
+
+        Ok(Ego { h: h_arr, f_aligned, ok: true })
     }
+
+    fn stage2_dense_flow(&mut self, ego: &Ego) -> CvResult<()> {
+        let size = core::Size::new(self.params.w, self.params.h);
+        
+        let mut h_mat = core::Mat::new_rows_cols_with_default(3, 3, core::CV_64FC1, core::Scalar::all(0.0))?;
+        for i in 0..3 {
+            for j in 0..3 {
+                *h_mat.at_2d_mut::<f64>(i, j)? = ego.h[(i * 3 + j) as usize];
+            }
+        }
+
+        imgproc::warp_perspective_def(
+            &self.ws.prev, &mut self.ws.prev_w, &h_mat, size
+        )?;
+
+        let ones = core::Mat::new_rows_cols_with_default(self.params.h, self.params.w, core::CV_8UC1, core::Scalar::all(255.0))?;
+        let mut ones_w = core::Mat::default();
+        imgproc::warp_perspective_def(
+            &ones, &mut ones_w, &h_mat, size
+        )?;
+        
+        let kernel = imgproc::get_structuring_element(imgproc::MORPH_RECT, core::Size::new(7, 7), core::Point::new(-1, -1))?;
+        imgproc::erode(&ones_w, &mut self.ws.valid, &kernel, core::Point::new(-1, -1), 1, core::BORDER_CONSTANT, core::Scalar::default())?;
+
+        self.ws.dis.calc(&self.ws.prev_w, &self.ws.curr, &mut self.ws.flow)?;
+
+        Ok(())
+    }
+
+    fn stage3_residual_score(&mut self, ego: &Ego) -> CvResult<()> {
+        let flow_data = self.ws.flow.data_typed::<core::Vec2f>()?;
+        let valid_data = self.ws.valid.data_typed::<u8>()?;
+
+        // 1. Calculate Adaptive noise floor
+        let mut mags = Vec::with_capacity(flow_data.len() / 7);
+        for i in (0..flow_data.len()).step_by(7) {
+            if valid_data[i] != 0 {
+                let v = flow_data[i];
+                let m = (v[0] * v[0] + v[1] * v[1]).sqrt();
+                mags.push(m);
+            }
+        }
+
+        let tau_a = if mags.is_empty() {
+            self.params.tau_min
+        } else {
+            let mid = mags.len() / 2;
+            let (_, median, _) = mags.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+            let m = *median;
+            
+            let mut abs_devs: Vec<f32> = mags.iter().map(|&x| (x - m).abs()).collect();
+            let (_, mad, _) = abs_devs.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap());
+            let sigma = 1.4826 * *mad;
+            
+            self.params.tau_min.max(m + self.params.k_sigma * sigma)
+        };
+
+        // 2. Compute Score
+        self.ws.score = core::Mat::new_rows_cols_with_default(self.params.h, self.params.w, core::CV_32FC1, core::Scalar::all(0.0))?;
+        let mut score_data = self.ws.score.data_typed_mut::<f32>()?;
+
+        let ww = self.params.w as usize;
+        let hh = self.params.h as usize;
+
+        for y in 0..hh {
+            for x in 0..ww {
+                let i = y * ww + x;
+                if valid_data[i] == 0 {
+                    score_data[i] = 0.0;
+                    continue;
+                }
+                let v = flow_data[i];
+                let a = (v[0] * v[0] + v[1] * v[1]).sqrt() / tau_a;
+                
+                score_data[i] = match &ego.f_aligned {
+                    None => a,
+                    Some(f) => {
+                        let (px, py) = (x as f64, y as f64);
+                        let (qx, qy) = (px + v[0] as f64, py + v[1] as f64);
+                        let l0 = f[0]*px + f[1]*py + f[2];
+                        let l1 = f[3]*px + f[4]*py + f[5];
+                        let l2 = f[6]*px + f[7]*py + f[8];
+                        let m0 = f[0]*qx + f[3]*qy + f[6];
+                        let m1 = f[1]*qx + f[4]*qy + f[7];
+                        let num = qx*l0 + qy*l1 + l2;
+                        let d = (num*num / (l0*l0 + l1*l1 + m0*m0 + m1*m1 + 1e-12)).sqrt() as f32;
+                        a.min(d / self.params.tau_epi)
+                    }
+                };
+            }
+        }
+
+        Ok(())
+    }
+
+    fn stage4_mask_and_bbox(&mut self) -> CvResult<Option<crate::types::DetectedObject>> {
+        // 1. Threshold
+        imgproc::threshold(&self.ws.score, &mut self.ws.mask, 1.0, 255.0, imgproc::THRESH_BINARY)?;
+        let mut mask_8u = core::Mat::default();
+        self.ws.mask.convert_to(&mut mask_8u, core::CV_8UC1, 1.0, 0.0)?;
+        self.ws.mask = mask_8u;
+
+        // 2. Morphology: OPEN then CLOSE
+        let mut temp = core::Mat::default();
+        imgproc::morphology_ex_def(
+            &self.ws.mask, &mut temp, imgproc::MORPH_OPEN, &self.ws.kernel_open
+        )?;
+        imgproc::morphology_ex_def(
+            &temp, &mut self.ws.mask, imgproc::MORPH_CLOSE, &self.ws.kernel_close
+        )?;
+
+        // 3. Connected Components
+        let mut labels = core::Mat::default();
+        let mut stats = core::Mat::default();
+        let mut centroids = core::Mat::default();
+
+        let n_labels = imgproc::connected_components_with_stats_def(
+            &self.ws.mask, &mut labels, &mut stats, &mut centroids
+        )?;
+
+        let mut best_label = 0;
+        let mut max_score = -1.0;
+        let mut best_bbox = None;
+
+        for i in 1..n_labels {
+            let area = *stats.at_2d::<i32>(i, imgproc::CC_STAT_AREA)?;
+            if area < 12 { // A_min
+                continue;
+            }
+
+            // To get sum over mask: mean * area
+            let mut comp_mask = core::Mat::default();
+            core::compare(&labels, &core::Scalar::all(i as f64), &mut comp_mask, core::CMP_EQ)?;
+            let mean_score = core::mean(&self.ws.score, &comp_mask)?;
+            let sum_score = mean_score[0] * area as f64;
+
+            if sum_score > max_score {
+                max_score = sum_score;
+                best_label = i;
+                let x = *stats.at_2d::<i32>(i, imgproc::CC_STAT_LEFT)? as f32;
+                let y = *stats.at_2d::<i32>(i, imgproc::CC_STAT_TOP)? as f32;
+                let w = *stats.at_2d::<i32>(i, imgproc::CC_STAT_WIDTH)? as f32;
+                let h = *stats.at_2d::<i32>(i, imgproc::CC_STAT_HEIGHT)? as f32;
+                best_bbox = Some(crate::types::BoundingBox { x, y, width: w, height: h });
+            }
+        }
+
+        let mut mask_8u_final = core::Mat::default();
+        if best_label > 0 {
+            core::compare(&labels, &core::Scalar::all(best_label as f64), &mut self.ws.mask, core::CMP_EQ)?;
+            self.ws.mask.convert_to(&mut mask_8u_final, core::CV_8UC1, 1.0/255.0, 0.0)?;
+            self.ws.mask = mask_8u_final;
+        } else {
+            self.ws.mask.set_to(&core::Scalar::all(0.0), &core::no_array())?;
+        }
+
+        let best_obj = best_bbox.map(|bbox| {
+            crate::types::DetectedObject {
+                class_id: 1,
+                class_name: "UAV".to_string(),
+                confidence: max_score as f32,
+                bbox,
+            }
+        });
+
+        Ok(best_obj)
+    }
+}
+
+impl FrameProcessor for OpticalFlowProcessor {
+    fn process_frame(&mut self, frame: &Frame) -> std::result::Result<ProcessingResult, String> {
+        let size = core::Size::new(self.params.w, self.params.h);
+        
+        let raw_mat = core::Mat::from_slice(&frame.data).map_err(|e| e.to_string())?;
+        let frame_mat = raw_mat.reshape(3, frame.height as i32).map_err(|e| e.to_string())?;
+
+        let mut curr_gray = core::Mat::default();
+        if frame_mat.channels() == 3 {
+            imgproc::cvt_color_def(&frame_mat, &mut curr_gray, imgproc::COLOR_BGR2GRAY).map_err(|e| e.to_string())?;
+        } else {
+            frame_mat.copy_to(&mut curr_gray).map_err(|e| e.to_string())?;
+        }
+
+        imgproc::resize(&curr_gray, &mut self.ws.curr, size, 0.0, 0.0, imgproc::INTER_LINEAR).map_err(|e| e.to_string())?;
+
+        if !self.initialized {
+            self.ws.prev = self.ws.curr.clone();
+            self.ws.feat_mask = core::Mat::new_rows_cols_with_default(self.params.h, self.params.w, core::CV_8UC1, core::Scalar::all(255.0)).map_err(|e| e.to_string())?;
+            self.initialized = true;
+            return Ok(ProcessingResult {
+                objects: vec![],
+                mask: crate::types::SemanticMask {
+                    data: vec![0; (frame.width * frame.height) as usize],
+                    width: frame.width,
+                    height: frame.height,
+                },
+            });
+        }
+
+        let ego = self.estimate_ego().map_err(|e| e.to_string())?;
+        if ego.ok {
+            self.ws.h_prev = ego.h;
+        }
+
+        let ego_to_use = if ego.ok { ego } else { Ego { h: self.ws.h_prev, f_aligned: None, ok: false } };
+
+        self.stage2_dense_flow(&ego_to_use).map_err(|e| e.to_string())?;
+        self.stage3_residual_score(&ego_to_use).map_err(|e| e.to_string())?;
+        let obj = self.stage4_mask_and_bbox().map_err(|e| e.to_string())?;
+
+        self.ws.prev = self.ws.curr.clone();
+
+        // Scale bbox back to original frame size
+        let mut objects = vec![];
+        if let Some(mut o) = obj {
+            let scale_x = frame.width as f32 / self.params.w as f32;
+            let scale_y = frame.height as f32 / self.params.h as f32;
+            o.bbox.x *= scale_x;
+            o.bbox.y *= scale_y;
+            o.bbox.width *= scale_x;
+            o.bbox.height *= scale_y;
+            objects.push(o);
+        }
+
+        let mut out_mask = core::Mat::default();
+        imgproc::resize(
+            &self.ws.mask, &mut out_mask,
+            core::Size::new(frame.width as i32, frame.height as i32),
+            0.0, 0.0, imgproc::INTER_NEAREST
+        ).map_err(|e| e.to_string())?;
+
+        let mut mask_data = vec![0u8; (frame.width * frame.height) as usize];
+        let out_mask_bytes = out_mask.data_bytes().map_err(|e| e.to_string())?;
+        mask_data.copy_from_slice(out_mask_bytes);
+
+        Ok(ProcessingResult {
+            objects,
+            mask: crate::types::SemanticMask { 
+                data: mask_data,
+                width: frame.width,
+                height: frame.height,
+            },
+        })
+    }
+}
+
+fn mul3(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut r = [0.0; 9];
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                r[i * 3 + j] += a[i * 3 + k] * b[k * 3 + j];
+            }
+        }
+    }
+    r
 }
