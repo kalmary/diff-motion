@@ -4,8 +4,8 @@ use diff_motion_core::process_video_stream;
 use diff_motion_core::config::{AppConfig, AlgorithmConfig, OutputMode};
 
 #[pyfunction]
-#[pyo3(signature = (headless=true, processing_type=None, camera_index=None))]
-fn run(headless: bool, processing_type: Option<String>, camera_index: Option<usize>) {
+#[pyo3(signature = (headless=true, processing_type=None, camera_index=None, video_path=None))]
+fn run(headless: bool, processing_type: Option<String>, camera_index: Option<usize>, video_path: Option<String>) {
     let mut config = AppConfig::default();
     
     if headless {
@@ -19,6 +19,7 @@ fn run(headless: bool, processing_type: Option<String>, camera_index: Option<usi
     }
 
     config.camera_index = camera_index;
+    config.video_path = video_path;
 
     process_video_stream(config);
 }

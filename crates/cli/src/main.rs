@@ -20,6 +20,10 @@ pub struct Cli {
     /// Camera index
     #[arg(long)]
     pub camera_index: Option<usize>,
+
+    /// Path to a video file for testing
+    #[arg(long)]
+    pub video_path: Option<String>,
 }
 
 fn main() {
@@ -42,6 +46,10 @@ fn main() {
 
     if let Some(idx) = cli.camera_index {
         app_config.camera_index = Some(idx);
+    }
+
+    if let Some(vp) = cli.video_path {
+        app_config.video_path = Some(vp);
     }
 
     println!("Starting diff-motion with config: {:?}", app_config);

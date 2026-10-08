@@ -5,6 +5,7 @@ pub struct AppConfig {
     pub algorithm_config: AlgorithmConfig,
     pub output_mode: OutputMode,
     pub camera_index: Option<usize>,
+    pub video_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,6 +30,7 @@ mod tests {
         let config = AppConfig::default();
         assert_eq!(config.output_mode, OutputMode::Headless);
         assert_eq!(config.camera_index, None);
-        assert_eq!(config.algorithm_config.yolo_model_size, "");
+        assert_eq!(config.video_path, None);
+        assert_eq!(config.algorithm_config.processing_type, "");
     }
 }
