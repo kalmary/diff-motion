@@ -1,7 +1,11 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
 [project]
 name = "diff-motion"
 version = "0.1.0"
-description = "Add your description here"
+description = "A real-time computer-vision application for UAVs"
 readme = "README.md"
 authors = [
     { name = "Michal Siniarski", email = "siniarskim@gmail.com" }
@@ -9,6 +13,10 @@ authors = [
 requires-python = ">=3.8"
 dependencies = []
 
-[build-system]
-requires = ["uv_build>=0.11.19,<0.12.0"]
-build-backend = "uv_build"
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "diff_motion"
+manifest-path = "crates/python/Cargo.toml"

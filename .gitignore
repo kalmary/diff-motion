@@ -33,3 +33,8 @@ pip-wheel-metadata/
 .env.*
 !.env.example
 
+
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bk

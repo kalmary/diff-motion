@@ -3,15 +3,13 @@
 Build a real-time computer-vision application for an NVIDIA Jetson Nano mounted on an unmanned aerial vehicle (UAV). The application must:
 
 - Capture a live video stream from a camera connected to the Jetson Nano.
-- Run object detection on each captured frame using the latest YOLO version supported by the target platform.
-- Use a small, resource-efficient YOLO model suitable for the Jetson Nano by default.
-- Produce detected object classes and their bounding boxes for every processed frame.
-- Optionally display the live camera stream with class labels and bounding boxes overlaid on the image.
+- Detect the target UAV using a **purely deterministic algorithm based on optical flow separations**. No neural networks, deep learning models, or AI are permitted for the segmentation.
+- Produce a semantic mask (binary mask where UAV is 1 and background is 0) and derive bounding boxes for every processed frame based entirely on this motion segmentation.
+- Optionally display the live camera stream with bounding boxes and semantic mask overlaid on the image.
 - Expose runtime configuration through a command-line interface, including:
-  - processing type; initially, only object detection with classes and bounding boxes is supported;
+  - processing type; initially, motion-based segmentation and bounding boxes are supported;
   - whether the processed video window is displayed;
-  - display dimensions;
-  - YOLO model-size selection.
+  - display dimensions.
 
 The core capture and inference pipeline must work without the optional display so that the application can run headlessly on the UAV.
 
@@ -112,12 +110,14 @@ When instructions conflict, follow this order:
 
 ## Testing code
 
-- Unit and integration tests should be written and run for new code.
-- Unit tests for given functions should be written in their original files.
-- Integration tests should be written in the `tests/` directory, outside of `src/`.
-- Always run tests, once new code is written.
-- If tests fail, explain why and identify the remaining uncertainty.
-- We use pytest for testing. No need for complex testing structure.
+- We follow Test-Driven Development (TDD). Write the test first, see it fail, then write minimal code to pass.
+- For Rust code (`crates/core`, `crates/cli`, `crates/python`):
+  - Write unit tests in their original files (using `#[cfg(test)]`).
+  - Write integration tests in the `tests/` directory within each crate.
+  - Run tests with `cargo test` and ensure they pass.
+- For Python code (wrappers, scripts, or integration tests):
+  - Use `pytest` for testing.
+- Always run tests once new code is written. If tests fail, explain why and identify the remaining uncertainty.
 
 ## Python dependencies
 
@@ -132,7 +132,7 @@ When instructions conflict, follow this order:
 - As an LLM you are able to edit documentation when requested.
 - You should do this withour use of extra python/ any other extra scripts.
 - You can use script when file format doesn't support editing directly.
-- After every prompt concerning repository work, add one concise bullet to the `Work Log` in `docs/status.md`. Each bullet must summarize the request and the completed result.
+- After every prompt concerning repository work, add one concise bullet to the `Work Log` in `docs/STATUS.md`. Each bullet must summarize the request and the completed result.
 - Keep at most 50 `Work Log` bullets. When adding a fifty-first entry, remove the oldest entry.
 
 ## Agent based workflow

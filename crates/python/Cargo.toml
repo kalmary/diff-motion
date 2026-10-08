@@ -1,0 +1,13 @@
+[package]
+name = "diff-motion-python"
+version = "0.1.0"
+edition = "2021"
+authors = ["Michal Siniarski <siniarskim@gmail.com>"]
+
+[lib]
+name = "diff_motion"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }
+diff-motion-core = { path = "../core" }
