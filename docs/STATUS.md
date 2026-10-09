@@ -24,3 +24,25 @@
 - Refactored environment configuration to restrict Conda to C++ dependencies and system packages, managing Python explicitly via a `uv` virtual environment, and updated `environment.yml`, `justfile`, and `README.md` accordingly.
 - Removed unnecessary runner commands from `justfile` and updated `README.md` usage instructions.
 - Removed the `clean` task from `justfile` as native `cargo clean` and manual deletions are preferred.
+- Modularized `justfile` to separate `build-rust`, `build-python`, `test-rust`, and `test-python` targets, and converted Python initialization to use `uv sync`.
+- Recreated `.cargo/config.toml` with linker flags for macOS (`-undefined dynamic_lookup`) to fix PyO3 `cdylib` compilation errors when running `cargo build` in the workspace.
+- Re-added a `clean-all` task to `justfile` to conveniently wipe Cargo build artifacts and the `uv` virtual environment.
+- Refactored `justfile` recipes to use bash shebang blocks (`#!/usr/bin/env bash`), properly evaluating `conda shell.bash hook` to natively activate environments and avoid brittle `conda run` nesting or subshell prefixes.
+- Removed all hardcoded `LIBCLANG_PATH` and `DYLD_FALLBACK_LIBRARY_PATH` exports from the `justfile` per user request to keep it strictly cross-platform without macOS hacks.
+- Resolved the `dyld` linker issue seamlessly by adding `rust` and `clangdev` directly to `environment.yml`, ensuring the Conda-managed `cargo` naturally resolves and links Conda libraries without relying on hardcoded environment variable exports.
+- Removed Conda-managed Rust and instead configured Conda to natively persist `LIBCLANG_PATH` and `DYLD_FALLBACK_LIBRARY_PATH` inside the environment definition via `conda env config vars set`, satisfying the requirement to use system Cargo without any explicit exports in the `justfile` build recipes.
+- Stripped all Conda environment variable configurations and Conda-managed Clang distributions to rely exclusively on the system toolchain, guaranteeing a fully native cross-platform build without platform-specific hacks.
+- Appended explicit toolchain resolution rules to `AGENTS.md` preventing agents from attempting to manage Rust/Clang via Conda or applying macOS-specific `LIBCLANG_PATH` export hacks in the future.
+- Rewrote `justfile` to use interactive bash (`bash -ic`) enabling seamless native `conda activate` usage across all targets without any brittle `eval` hooks or `conda run` nesting.
+- Stripped `justfile` entirely of any conda activations or wrappers, adopting a clean design where `just` assumes the user has activated the Conda environment in their host shell, completely eliminating the job control `SIGTTIN` bugs and nesting issues.
+- Reviewed all Markdown files, implementation, tests, dependencies, and `justfile`; documented requirement gaps and cross-platform build issues without changing application code.
+- Clarified that `justfile` should provide project-level grouped workflows rather than one-to-one aliases for individual Cargo commands; implementation design is pending environment-setup semantics.
+- Selected an explicit `just setup` workflow so routine grouped build, test, run, and verification commands do not update the Conda environment.
+- Replaced single-tool Just wrappers with documented project workflows for setup, build, test, verification, and execution across Rust, Python, and Conda.
+- Removed per-command Conda prefixes from Just workflows; commands now use one explicitly activated cross-platform Conda environment.
+- Limited Rust OpenCV features, moved Python builds into the active Conda environment, and linked Unix artifacts to its native library directory without command prefixes.
+- Removed compiler warnings, added hardware-independent binding tests, and brought the complete verification workflow to a buildable state.
+- Audited platform assumptions, removed unsafe frame copying and host-generated configuration, aligned native dependency versions, and added edge-case and headless verification paths.
+- Completed edge-case coverage for capture, frame validation, numerical stability, CLI parsing, and Python error propagation; verified display and headless builds.
+- Split environment bootstrap into Conda, Rust, and Python setup workflows so a fresh setup no longer requires an already available or active Python interpreter.
+- Added grouped activation workflows for the complete project environment, Conda, Rust, and the project Python interpreter across Unix and Windows.

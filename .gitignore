@@ -39,5 +39,10 @@ pip-wheel-metadata/
 **/*.rs.bk
 Cargo.lock.bk
 
+# CMake
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+
 # testing files
 /fixtures/

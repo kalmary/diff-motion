@@ -127,6 +127,12 @@ When instructions conflict, follow this order:
 - Build backends and packaging requirements belong in `build-system`, not in the main or test dependency groups.
 - Add packages with `uv`; do not install an unrecorded dependency directly into the environment.
 
+## System Dependencies & Toolchains
+
+- **DO NOT** attempt to provision or manage foundational compiler toolchains (like `rust`, `clang`, or `libclang`) via Conda unless specifically asked. Rely on the user's globally installed system dependencies (e.g., `cargo` via `rustup`, and system LLVM/Clang via macOS Xcode Command Line Tools or Linux package managers).
+- **DO NOT** inject environment variables like `LIBCLANG_PATH` or `DYLD_FALLBACK_LIBRARY_PATH` into `justfile` recipes, shell commands, or `.cargo/config.toml` in an attempt to forcefully link macOS libraries or fix `dyld` errors related to Conda's isolated libraries.
+- If a Rust C-bindings crate (like `opencv` / `clang-sys`) complains about missing `libclang` in Conda, resolve it by ensuring Conda is NOT providing `clang`, forcing the build scripts to naturally fall back to the system's properly-linked host compiler.
+
 ## Editing documentation
 
 - As an LLM you are able to edit documentation when requested.

@@ -21,59 +21,117 @@ The project is structured as a Cargo workspace with three crates:
 
 ## Prerequisites
 
-- **Rust** (Edition 2021)
-- **Conda** (Miniconda, Anaconda, or Micromamba)
-- **uv** (fast Python package installer and resolver, install via `curl -LsSf https://astral.sh/uv/install.sh | sh` or `brew install uv`)
-- **Just** (command runner, install via `cargo install just` or `brew install just`)
+- **Rust 1.88 or newer** (Edition 2021)
+- **Conda** (Miniconda or Anaconda)
+- **System Clang/LLVM** (e.g., Xcode Command Line Tools on macOS, Visual Studio Build Tools and LLVM on Windows, or `libclang-dev` on Linux)
+- **uv** (fast Python package installer and resolver; use the installation method supported by your operating system)
+- **Just** (cross-platform command runner; install with `cargo install just` or your system package manager)
 
 ### Environment Setup
 
-This project uses Conda to manage C++ dependencies (OpenCV, Clang, CMake), while Python libraries are managed via a `uv` virtual environment, isolating them from the global system.
+This project uses one active Conda environment for Python and native dependencies such as OpenCV 5 and CMake. Rust is managed by the system Rust toolchain. `uv` installs the recorded Python development tools into the active Conda environment.
 
-To create the Conda environment and install all necessary dependencies:
+Prepare the Conda environment, Rust components, and Python development tools:
 
 ```bash
-just build-conda
+just setup
 ```
 
-*Note: This command will use `conda env update` to either create or update the `diff-motion` environment defined in `environment.yml`.*
+`setup` creates or updates the `diff-motion` Conda environment, installs the Rust formatting and linting components, fetches locked Cargo dependencies, and installs the recorded Python development tools, including `pytest`, into that environment. The individual stages can also be run separately:
+
+```bash
+just setup-conda
+just setup-rust
+just setup-python
+```
+
+The setup process runs Python installation commands inside `diff-motion`, even when the environment is not active. A child process cannot activate Conda in its parent shell, so activate it after setup before using the routine workflows:
+
+```bash
+conda activate diff-motion
+```
+
+Alternatively, open a child shell or interpreter prepared by Just:
+
+```bash
+just activate
+```
+
+The activation workflows are also available separately:
+
+```bash
+just activate-conda
+just activate-rust
+just activate-python
+```
+
+`activate` opens an interactive project shell with both the Conda environment and stable Rust toolchain selected. `activate-conda` and `activate-rust` open shells for their respective environments, while `activate-python` starts the project Python interpreter. Exit a child shell or interpreter to return to the original terminal.
+
+Run setup explicitly after changing `environment.yml`, `pyproject.toml`, or the required Rust components. Routine build and test workflows do not update the environment.
 
 ## Building & Testing
 
-To compile the Rust project, initialize the Python `uv` virtual environment, and build the Python bindings, run:
+The public Just recipes group operations across Rust, Python, and native dependencies:
+
+| Command | Description |
+| --- | --- |
+| `just setup` | Prepare the Conda, Rust, and Python development environments. |
+| `just setup-conda` | Create or update the Conda environment and native dependencies. |
+| `just setup-rust` | Install Rust components and fetch locked Cargo dependencies. |
+| `just setup-python` | Install Python development and test tools into the Conda environment. |
+| `just activate` | Open a project shell with Conda and stable Rust active. |
+| `just activate-conda` | Open a shell inside the project Conda environment. |
+| `just activate-rust` | Open a shell using the stable Rust toolchain. |
+| `just activate-python` | Start Python inside the project Conda environment. |
+| `just build` | Build the Rust application and Python extension. |
+| `just build-headless` | Build both entry points without OpenCV display support. |
+| `just test` | Build the Python extension and run the Rust and Python test suites. |
+| `just test-headless` | Run both test suites without OpenCV display support. |
+| `just verify` | Verify formatting, linting, builds, and tests with and without display support. |
+| `just run <arguments>` | Run the CLI with the active Conda environment. |
+
+To build the complete project, run:
 
 ```bash
-just build-project
+just build
 ```
 
-To run the test suite (both Rust and Python tests):
+To run all Rust and Python tests:
 
 ```bash
 just test
 ```
 
-## Usage
+For a deployment without GUI libraries, use:
 
-First, activate the Conda environment:
 ```bash
-conda activate diff-motion
+just build-headless
+just test-headless
 ```
 
-You can then run the application via the CLI crate. The CLI supports loading from a configuration file, selecting a camera index, or injecting a test video.
+### Supported platforms
+
+The source is designed for native builds on Windows x86-64, macOS x86-64 and ARM64, and Linux x86-64 and ARM64, including Jetson-class devices. Conda-forge provides OpenCV 5 packages for these targets. Each device builds its own native artifacts; binaries and Python wheels are not interchangeable between operating systems or CPU architectures.
+
+The default build includes display support. Headless builds do not compile or link the Rust HighGUI integration and are intended for UAV deployment. Camera indices use the backend selected by OpenCV on the host. File input is the portable option for automated verification; physical camera and CSI/GStreamer availability must be verified on the target hardware.
+
+## Usage
+
+Run the following commands after activating the `diff-motion` Conda environment. The CLI supports loading from a configuration file, selecting a camera index, or injecting a test video.
 
 **Run with a live camera stream (with display window):**
 ```bash
-cargo run --release --bin diff-motion-cli -- --camera-index 0 --display
+just run --camera-index 0 --display
 ```
 
 **Run headlessly with a live camera:**
 ```bash
-cargo run --release --bin diff-motion-cli -- --camera-index 0
+just run --camera-index 0
 ```
 
 **Run using a test video file:**
 ```bash
-cargo run --release --bin diff-motion-cli -- --video-path tests/fixtures/sample_flight.mp4 --display
+just run --video-path fixtures/gemini_generated_video_8813b1b0.mp4 --display
 ```
 
 ## Algorithm Overview

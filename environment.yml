@@ -1,11 +1,8 @@
 name: diff-motion
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - python>=3.12,<3.13
-  - opencv>=4.8
+  - opencv>=5,<6
   - pkg-config
-  - clang
-  - libclang
   - cmake
