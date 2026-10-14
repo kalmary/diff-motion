@@ -4,7 +4,7 @@ Purely deterministic pipeline: **ego-motion compensation + aligned dense optical
 
 Output per frame: a binary mask (target = 1, background = 0) and a bounding box derived from it.
 
-> Status: design spec. Not compiled or benchmarked. Check `opencv` crate signatures against the pinned version (`find_homography`, `cudaoptflow` wrappers change between releases). All latency figures are **budgets to be measured**, not results.
+> Status: design specification with a CPU implementation of motion segmentation and SEARCH/LOCK/COAST tracking. Short image-sequence tests cover rigid camera motion, target motion, and temporary stagnation. The tracker predicts center and velocity while retaining measured box size. DIS runs at full working resolution and the valid region excludes a border derived from its patch size. CUDA, flight-footage robustness, and target-hardware performance remain unverified. All latency figures are **budgets to be measured**, not results.
 
 ---
 

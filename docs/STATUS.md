@@ -2,15 +2,6 @@
 
 ## Work Log
 
-- Updated `AGENTS.md` and `docs/PROJECT_GOAL.md` to specify that the goal is to determine a semantic mask based on observations, specifically outputting a binary mask where the UAV is 1 and the background is 0.
-- Renamed `docs/status.md` to `docs/STATUS.md` and updated `AGENTS.md` to reflect the capitalized filename.
-- Read all markdown files in the repository (AGENTS.md, README.md, docs/PROJECT_GOAL.md, docs/PLAN.md, docs/STATUS.md) to build context on project architecture and entry points.
-- Restructured repository to use Cargo workspace with separate crates for core, cli, and python wrapper. Added testing guidelines for Rust and Python, added .cargo/config.toml for macOS compilation, and initialized basic tests.
-- Defined abstract  trait and core data structures (, , , etc.) to support agnostic implementation of target detection algorithms as requested.
-- Defined abstract FrameProcessor trait and core data structures (Frame, BoundingBox, SemanticMask, etc.) to support agnostic implementation of target detection algorithms as requested.
-- Updated Python bindings via PyO3 to accept configuration parameters, specifically supporting `headless=True` mode out of the box, and added pytest verification tests.
-- Drafted a comprehensive prompt defining the dynamic motion segmentation problem for the user to consult external algorithmic models.
-- Copied the algorithm generation prompt to `docs/algorithm_prompt.md` as requested.
 - Removed all YOLO/object detector assumptions from the architecture and updated `AGENTS.md`, `docs/algorithm_prompt.md`, and configurations to reflect pure motion-based target isolation.
 - Updated `AGENTS.md`, `docs/PROJECT_GOAL.md`, and `docs/algorithm_prompt.md` to explicitly mandate that the solution must be a purely deterministic algorithm based entirely on optical flow separations, strictly forbidding neural networks.
 - Updated `.gitignore` to include standard Rust ignore patterns (e.g. `target/` directory).
@@ -46,3 +37,18 @@
 - Completed edge-case coverage for capture, frame validation, numerical stability, CLI parsing, and Python error propagation; verified display and headless builds.
 - Split environment bootstrap into Conda, Rust, and Python setup workflows so a fresh setup no longer requires an already available or active Python interpreter.
 - Added grouped activation workflows for the complete project environment, Conda, Rust, and the project Python interpreter across Unix and Windows.
+- Re-read every Markdown file to refresh the project requirements, deterministic algorithm specification, implementation plan, environment workflows, and current status.
+- Re-read the project documentation and checked the implementation against it; identified per-frame headless output and measured algorithm validation as the next priorities.
+- Added per-frame Rust and Python callbacks with binary masks, bounding boxes, and error propagation; documented the API and passed formatting, warning-free linting, and all 33 Rust and 6 Python tests in display and headless configurations.
+- Implemented SEARCH/LOCK/COAST tracking and three short textured-video motion tests; improved small-target flow resolution and border exclusion, then passed all 39 Rust and 6 Python tests and warning-free verification in both build configurations.
+- Documented the delivered headless/display modes, automatic tracking states, and the remaining unsupported JSON output and algorithm-selection behavior.
+- Clarified that combined activation opens a shell with Conda and stable Rust, while Python shares Conda and its individual activation command opens the interactive interpreter.
+- Verified that combined activation selects the project Python in an interactive shell and made Python explicit in the activation recipe description and workflow table.
+- Separated native Conda dependencies, uv-managed Python `.venv`, and rustup; updated all environment workflows, dependency groups, lockfile, and documentation, removed legacy Conda Python tooling, and passed complete display/headless verification.
+- Removed redundant Rust activation and forced toolchain selection; setup now checks globally installed Rust tools and fetches dependencies, while activation prepares only Conda and uv environments.
+- Added separate Python, Conda, and Cargo cleanup recipes and recreation instructions; tested Python removal and recreation in a temporary environment and validated Conda/Cargo cleanup with dry runs.
+- Added `clean-all` to group native environment removal, Python virtual environment deletion, and Cargo artifact cleanup; documented recreation and checked the command order with a dry run.
+- Pinned Rust/Cargo 1.99.0 in Conda, updated setup and cleanup ordering and environment rules, rejected global toolchain fallback, and passed complete display/headless verification with uv-owned Python.
+- Made `clean` the complete cleanup command and retained `clean-all` as an alias.
+- Fixed removal of the activated project Conda environment by using the base manager context; reproduced the active-environment case and confirmed Cargo artifacts, `.venv`, and the Conda environment were removed.
+- Added shared uv cache cleanup to complete cleanup and made missing-environment cleanup repeatable; verified artifact removal, repeated execution, and error propagation using isolated fixtures.

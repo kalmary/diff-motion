@@ -1,6 +1,9 @@
 use crate::types::{Frame, ProcessingResult};
 use opencv::{core, features, geometry, imgproc, prelude::*, video, Result as CvResult};
 
+mod tracker;
+use tracker::Tracker;
+
 pub struct Params {
     pub w: i32,
     pub h: i32,
@@ -83,7 +86,8 @@ impl Ws {
         params.validate()?;
         let _size = core::Size::new(params.w, params.h);
 
-        let dis = video::DISOpticalFlow::create(video::DISOpticalFlow_PRESET_FAST)?;
+        let mut dis = video::DISOpticalFlow::create(video::DISOpticalFlow_PRESET_FAST)?;
+        dis.set_finest_scale(0)?;
         let kernel_open = imgproc::get_structuring_element(
             imgproc::MORPH_RECT,
             core::Size::new(3, 3),
@@ -126,15 +130,19 @@ pub struct OpticalFlowProcessor {
     params: Params,
     ws: Ws,
     initialized: bool,
+    tracker: Tracker,
+    tau_a: f32,
 }
 
 impl OpticalFlowProcessor {
     pub fn new(params: Params) -> CvResult<Self> {
         let ws = Ws::new(&params)?;
         Ok(Self {
+            tau_a: params.tau_min,
             params,
             ws,
             initialized: false,
+            tracker: Tracker::new()?,
         })
     }
 
@@ -262,6 +270,13 @@ impl OpticalFlowProcessor {
 
         let inliers_data = inliers.data_typed::<u8>()?;
         let num_inliers = inliers_data.iter().filter(|&&v| v != 0).count();
+        if num_inliers < 30 {
+            return Ok(Ego {
+                h: self.ws.h_prev,
+                f_aligned: None,
+                ok: false,
+            });
+        }
         let parallax_fraction = 1.0 - (num_inliers as f64 / good_prev.len() as f64);
 
         let mut f_aligned = None;
@@ -324,9 +339,10 @@ impl OpticalFlowProcessor {
         let mut ones_w = core::Mat::default();
         imgproc::warp_perspective_def(&ones, &mut ones_w, &h_mat, size)?;
 
+        let border_width = self.ws.dis.get_patch_size()?;
         let kernel = imgproc::get_structuring_element(
             imgproc::MORPH_RECT,
-            core::Size::new(7, 7),
+            core::Size::new(2 * border_width + 1, 2 * border_width + 1),
             core::Point::new(-1, -1),
         )?;
         imgproc::erode(
@@ -374,7 +390,11 @@ impl OpticalFlowProcessor {
             }
         }
 
-        let tau_a = adaptive_noise_floor(mags, self.params.tau_min, self.params.k_sigma);
+        if ego.ok {
+            self.tau_a = adaptive_noise_floor(mags, self.params.tau_min, self.params.k_sigma);
+        }
+        let tau_a = self.tau_a;
+        let gate = self.tracker.gate();
 
         // 2. Compute Score
         self.ws.score = core::Mat::new_rows_cols_with_default(
@@ -398,7 +418,10 @@ impl OpticalFlowProcessor {
                 let v = flow_data[i];
                 let a = (v[0] * v[0] + v[1] * v[1]).sqrt() / tau_a;
 
+                let in_gate =
+                    gate.is_some_and(|gate| gate.contains(core::Point::new(x as i32, y as i32)));
                 let score = match &ego.f_aligned {
+                    _ if in_gate => a,
                     None => a,
                     Some(f) => {
                         let (px, py) = (x as f64, y as f64);
@@ -435,6 +458,21 @@ impl OpticalFlowProcessor {
             .mask
             .convert_to(&mut mask_8u, core::CV_8UC1, 1.0, 0.0)?;
         self.ws.mask = mask_8u;
+        let gate = self.tracker.gate();
+        if let Some(gate) = gate {
+            for y in gate.y..gate.y + gate.height {
+                for x in gate.x..gate.x + gate.width {
+                    if *self.ws.valid.at_2d::<u8>(y, x)? != 0 {
+                        *self.ws.mask.at_2d_mut::<u8>(y, x)? =
+                            if *self.ws.score.at_2d::<f32>(y, x)? > 0.6 {
+                                255
+                            } else {
+                                0
+                            };
+                    }
+                }
+            }
+        }
 
         // 2. Morphology: OPEN then CLOSE
         let mut temp = core::Mat::default();
@@ -465,12 +503,22 @@ impl OpticalFlowProcessor {
 
         let mut best_label = 0;
         let mut max_score = -1.0;
+        let mut best_rank = f64::NEG_INFINITY;
         let mut best_bbox = None;
 
         for i in 1..n_labels {
             let area = *stats.at_2d::<i32>(i, imgproc::CC_STAT_AREA)?;
             if area < 12 {
                 // A_min
+                continue;
+            }
+            let bounds = core::Rect::new(
+                *stats.at_2d::<i32>(i, imgproc::CC_STAT_LEFT)?,
+                *stats.at_2d::<i32>(i, imgproc::CC_STAT_TOP)?,
+                *stats.at_2d::<i32>(i, imgproc::CC_STAT_WIDTH)?,
+                *stats.at_2d::<i32>(i, imgproc::CC_STAT_HEIGHT)?,
+            );
+            if gate.is_some_and(|gate| (gate & bounds).empty()) {
                 continue;
             }
 
@@ -484,8 +532,16 @@ impl OpticalFlowProcessor {
             )?;
             let mean_score = core::mean(&self.ws.score, &comp_mask)?;
             let sum_score = mean_score[0] * area as f64;
+            let rank = if let Some(gate) = gate {
+                let dx = (bounds.x + bounds.width / 2 - gate.x - gate.width / 2) as f64;
+                let dy = (bounds.y + bounds.height / 2 - gate.y - gate.height / 2) as f64;
+                -(dx * dx + dy * dy)
+            } else {
+                sum_score
+            };
 
-            if sum_score > max_score {
+            if rank > best_rank {
+                best_rank = rank;
                 max_score = sum_score;
                 best_label = i;
                 let x = *stats.at_2d::<i32>(i, imgproc::CC_STAT_LEFT)? as f32;
@@ -580,6 +636,21 @@ impl FrameProcessor for OpticalFlowProcessor {
             });
         }
 
+        self.ws
+            .feat_mask
+            .set_to(&core::Scalar::all(255.0), &core::no_array())
+            .map_err(|e| e.to_string())?;
+        if let Some(gate) = self.tracker.gate() {
+            imgproc::rectangle(
+                &mut self.ws.feat_mask,
+                gate,
+                core::Scalar::all(0.0),
+                -1,
+                imgproc::LINE_8,
+                0,
+            )
+            .map_err(|e| e.to_string())?;
+        }
         let ego = self.estimate_ego().map_err(|e| e.to_string())?;
         if ego.ok {
             self.ws.h_prev = ego.h;
@@ -595,11 +666,18 @@ impl FrameProcessor for OpticalFlowProcessor {
             }
         };
 
+        self.tracker
+            .predict(&ego_to_use.h, size)
+            .map_err(|e| e.to_string())?;
         self.stage2_dense_flow(&ego_to_use)
             .map_err(|e| e.to_string())?;
         self.stage3_residual_score(&ego_to_use)
             .map_err(|e| e.to_string())?;
         let obj = self.stage4_mask_and_bbox().map_err(|e| e.to_string())?;
+        let obj = self
+            .tracker
+            .update(&self.ws.curr, &mut self.ws.mask, obj, ego_to_use.ok)
+            .map_err(|e| e.to_string())?;
 
         self.ws.prev = self.ws.curr.clone();
 

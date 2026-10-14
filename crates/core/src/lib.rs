@@ -4,11 +4,9 @@ pub mod types;
 
 use crate::config::{AppConfig, OutputMode};
 use crate::processor::{FrameProcessor, OpticalFlowProcessor, Params};
-use crate::types::Frame;
+use crate::types::{Frame, ProcessingResult};
 use opencv::{core, imgproc, prelude::*, videoio};
 
-#[cfg(feature = "display")]
-use crate::types::ProcessingResult;
 #[cfg(feature = "display")]
 use opencv::highgui;
 
@@ -79,7 +77,7 @@ fn validate_output_mode(output_mode: &OutputMode) -> Result<(), String> {
 #[cfg(feature = "display")]
 fn display_result(
     frame: &Frame,
-    result: ProcessingResult,
+    result: &ProcessingResult,
     window_name: &str,
 ) -> Result<bool, String> {
     let (width, height, _) = frame.validate_bgr()?;
@@ -118,7 +116,7 @@ fn display_result(
     core::add_weighted(&source, 0.7, &red_mask, 0.3, 0.0, &mut display_mat, -1)
         .map_err(|error| format!("Failed to blend display overlay: {error}"))?;
 
-    for object in result.objects {
+    for object in &result.objects {
         let rectangle = core::Rect::new(
             object.bbox.x as i32,
             object.bbox.y as i32,
@@ -144,6 +142,14 @@ fn display_result(
 }
 
 pub fn process_video_stream(config: AppConfig) -> Result<(), String> {
+    process_video_stream_with_callback(config, |_, _| Ok(()))
+}
+
+/// Delivers each processed frame synchronously; receiver errors stop capture.
+pub fn process_video_stream_with_callback(
+    config: AppConfig,
+    mut callback: impl FnMut(&Frame, &ProcessingResult) -> Result<(), String>,
+) -> Result<(), String> {
     validate_output_mode(&config.output_mode)?;
     println!("Initializing video stream processing...");
 
@@ -177,39 +183,72 @@ pub fn process_video_stream(config: AppConfig) -> Result<(), String> {
     }
 
     let mut captured = core::Mat::default();
-    loop {
-        if !capture
-            .read(&mut captured)
-            .map_err(|error| format!("Failed to read frame: {error}"))?
-            || captured.empty()
-        {
-            break;
+    let processing = (|| {
+        loop {
+            if !capture
+                .read(&mut captured)
+                .map_err(|error| format!("Failed to read frame: {error}"))?
+                || captured.empty()
+            {
+                break;
+            }
+
+            let frame = normalize_captured_frame(&captured)?;
+            let result = processor.process_frame(&frame)?;
+            callback(&frame, &result)?;
+
+            #[cfg(feature = "display")]
+            if display && display_result(&frame, &result, window_name)? {
+                break;
+            }
         }
-
-        let frame = normalize_captured_frame(&captured)?;
-        let result = processor.process_frame(&frame)?;
-
-        #[cfg(feature = "display")]
-        if display && display_result(&frame, result, window_name)? {
-            break;
-        }
-
-        #[cfg(not(feature = "display"))]
-        let _ = result;
-    }
+        Ok(())
+    })();
 
     #[cfg(feature = "display")]
     if display {
-        highgui::destroy_window(window_name)
-            .map_err(|error| format!("Failed to close display window: {error}"))?;
+        let cleanup = highgui::destroy_window(window_name)
+            .map_err(|error| format!("Failed to close display window: {error}"));
+        processing?;
+        cleanup?;
+        return Ok(());
     }
 
-    Ok(())
+    processing
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivers_headless_frame_and_stops_on_receiver_error() {
+        let config = AppConfig {
+            video_path: Some(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../fixtures/gemini_generated_video_8813b1b0.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            ..AppConfig::default()
+        };
+        let mut received = 0;
+        let error = process_video_stream_with_callback(config, |frame, result| {
+            received += 1;
+            assert_eq!(result.mask.width, frame.width);
+            assert_eq!(result.mask.height, frame.height);
+            assert_eq!(
+                result.mask.data.len(),
+                (frame.width * frame.height) as usize
+            );
+            assert!(result.mask.data.iter().all(|value| *value == 0));
+            assert!(result.objects.is_empty());
+            Err("receiver stopped".to_string())
+        })
+        .unwrap_err();
+        assert_eq!(received, 1);
+        assert_eq!(error, "receiver stopped");
+    }
 
     #[test]
     fn rejects_camera_index_outside_opencv_range() {

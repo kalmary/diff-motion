@@ -10,3 +10,5 @@
 2/3 importable packages rust and python get just video stream
 
 4. two output modes: display from camera (should work on macos, linux, windows (webcam/ usb camera: on of args should be camera index), json camera: step for later), headless
+
+5. environment ownership: Conda provides native C/C++ dependencies and the pinned Rust/Cargo toolchain, while uv owns Python and `.venv`

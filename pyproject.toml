@@ -13,13 +13,12 @@ authors = [
 requires-python = ">=3.8"
 dependencies = []
 
-[project.optional-dependencies]
-test = ["pytest"]
-
 [dependency-groups]
 dev = [
-    "maturin>=1.5",
-    "pytest>=8.0"
+    "maturin>=1.5,<2.0",
+]
+test = [
+    "pytest>=8.0",
 ]
 
 [tool.maturin]

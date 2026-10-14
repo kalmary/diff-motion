@@ -129,7 +129,11 @@ When instructions conflict, follow this order:
 
 ## System Dependencies & Toolchains
 
-- **DO NOT** attempt to provision or manage foundational compiler toolchains (like `rust`, `clang`, or `libclang`) via Conda unless specifically asked. Rely on the user's globally installed system dependencies (e.g., `cargo` via `rustup`, and system LLVM/Clang via macOS Xcode Command Line Tools or Linux package managers).
+- Environment ownership is fixed: Conda provides native C/C++ dependencies such as OpenCV, `pkg-config`, and CMake together with the exactly pinned `rust=1.99.0` package; uv manages the Python interpreter, project `.venv`, and Python dependencies. The Conda Rust package includes Cargo, rustc, rustfmt, and Clippy, so Cargo is not managed or versioned separately.
+- Rust commands must use the toolchain from the `diff-motion` Conda environment and reject any fallback to a global Rust or rustup installation. The crate manifests retain Rust 1.88 as their minimum supported Rust version.
+- The exact Rust pin does not lock every native Conda dependency to an exact build. `Cargo.lock` and `uv.lock` freeze the recorded Rust and Python language-package graphs.
+- Never use a Conda-provided Python interpreter for project builds, tests, or runtime, even if Conda installs one transitively. Do not install project Python packages into Conda, the system interpreter, or a global uv environment.
+- Allow compiler/linker dependencies pulled by the pinned Conda Rust package. **DO NOT** add Clang or `libclang` through Conda; use the host toolchain for OpenCV bindings, such as macOS Xcode Command Line Tools, Windows Visual Studio Build Tools and LLVM, or Linux system packages.
 - **DO NOT** inject environment variables like `LIBCLANG_PATH` or `DYLD_FALLBACK_LIBRARY_PATH` into `justfile` recipes, shell commands, or `.cargo/config.toml` in an attempt to forcefully link macOS libraries or fix `dyld` errors related to Conda's isolated libraries.
 - If a Rust C-bindings crate (like `opencv` / `clang-sys`) complains about missing `libclang` in Conda, resolve it by ensuring Conda is NOT providing `clang`, forcing the build scripts to naturally fall back to the system's properly-linked host compiler.
 
