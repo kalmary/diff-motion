@@ -2,35 +2,6 @@
 
 ## Work Log
 
-- Removed all YOLO/object detector assumptions from the architecture and updated `AGENTS.md`, `docs/algorithm_prompt.md`, and configurations to reflect pure motion-based target isolation.
-- Updated `AGENTS.md`, `docs/PROJECT_GOAL.md`, and `docs/algorithm_prompt.md` to explicitly mandate that the solution must be a purely deterministic algorithm based entirely on optical flow separations, strictly forbidding neural networks.
-- Updated `.gitignore` to include standard Rust ignore patterns (e.g. `target/` directory).
-- Added `video_path` configuration argument (default: None) to the CLI (`--video-path`) and Python bindings to allow injecting test videos in place of the live camera stream.
-- Read `docs/CORE_ALGHORITHM.md` to understand the deterministic ego-motion and epipolar flow algorithm. Added `opencv` crate to `core` to begin implementing the pipeline.
-- Implemented initialization and Stage 1 (Ego-motion via Sparse LK + RANSAC) of the optical flow segmentation pipeline into `crates/core/src/processor.rs`.
-- Resolved OpenCV 5.0 compilation issues on Mac by updating `opencv` rust bindings crate to 0.101.0 and updating module imports (`features` and `geometry`).
-- Implemented Stage 2 (Aligned Dense Flow), Stage 3 (Epipolar Residual Scoring), and Stage 4 (Morphology & Bounding Box) in `OpticalFlowProcessor`.
-- Implemented `process_video_stream` in `lib.rs` to run the main capture loop and optionally display the video stream with the overlaid semantic mask and bounding box.
-- Wrote initial `README.md` detailing project goals, architecture, prerequisites, build instructions, and usage.
-- Refactored environment configuration to restrict Conda to C++ dependencies and system packages, managing Python explicitly via a `uv` virtual environment, and updated `environment.yml`, `justfile`, and `README.md` accordingly.
-- Removed unnecessary runner commands from `justfile` and updated `README.md` usage instructions.
-- Removed the `clean` task from `justfile` as native `cargo clean` and manual deletions are preferred.
-- Modularized `justfile` to separate `build-rust`, `build-python`, `test-rust`, and `test-python` targets, and converted Python initialization to use `uv sync`.
-- Recreated `.cargo/config.toml` with linker flags for macOS (`-undefined dynamic_lookup`) to fix PyO3 `cdylib` compilation errors when running `cargo build` in the workspace.
-- Re-added a `clean-all` task to `justfile` to conveniently wipe Cargo build artifacts and the `uv` virtual environment.
-- Refactored `justfile` recipes to use bash shebang blocks (`#!/usr/bin/env bash`), properly evaluating `conda shell.bash hook` to natively activate environments and avoid brittle `conda run` nesting or subshell prefixes.
-- Removed all hardcoded `LIBCLANG_PATH` and `DYLD_FALLBACK_LIBRARY_PATH` exports from the `justfile` per user request to keep it strictly cross-platform without macOS hacks.
-- Resolved the `dyld` linker issue seamlessly by adding `rust` and `clangdev` directly to `environment.yml`, ensuring the Conda-managed `cargo` naturally resolves and links Conda libraries without relying on hardcoded environment variable exports.
-- Removed Conda-managed Rust and instead configured Conda to natively persist `LIBCLANG_PATH` and `DYLD_FALLBACK_LIBRARY_PATH` inside the environment definition via `conda env config vars set`, satisfying the requirement to use system Cargo without any explicit exports in the `justfile` build recipes.
-- Stripped all Conda environment variable configurations and Conda-managed Clang distributions to rely exclusively on the system toolchain, guaranteeing a fully native cross-platform build without platform-specific hacks.
-- Appended explicit toolchain resolution rules to `AGENTS.md` preventing agents from attempting to manage Rust/Clang via Conda or applying macOS-specific `LIBCLANG_PATH` export hacks in the future.
-- Rewrote `justfile` to use interactive bash (`bash -ic`) enabling seamless native `conda activate` usage across all targets without any brittle `eval` hooks or `conda run` nesting.
-- Stripped `justfile` entirely of any conda activations or wrappers, adopting a clean design where `just` assumes the user has activated the Conda environment in their host shell, completely eliminating the job control `SIGTTIN` bugs and nesting issues.
-- Reviewed all Markdown files, implementation, tests, dependencies, and `justfile`; documented requirement gaps and cross-platform build issues without changing application code.
-- Clarified that `justfile` should provide project-level grouped workflows rather than one-to-one aliases for individual Cargo commands; implementation design is pending environment-setup semantics.
-- Selected an explicit `just setup` workflow so routine grouped build, test, run, and verification commands do not update the Conda environment.
-- Replaced single-tool Just wrappers with documented project workflows for setup, build, test, verification, and execution across Rust, Python, and Conda.
-- Removed per-command Conda prefixes from Just workflows; commands now use one explicitly activated cross-platform Conda environment.
 - Limited Rust OpenCV features, moved Python builds into the active Conda environment, and linked Unix artifacts to its native library directory without command prefixes.
 - Removed compiler warnings, added hardware-independent binding tests, and brought the complete verification workflow to a buildable state.
 - Audited platform assumptions, removed unsafe frame copying and host-generated configuration, aligned native dependency versions, and added edge-case and headless verification paths.
@@ -52,3 +23,32 @@
 - Made `clean` the complete cleanup command and retained `clean-all` as an alias.
 - Fixed removal of the activated project Conda environment by using the base manager context; reproduced the active-environment case and confirmed Cargo artifacts, `.venv`, and the Conda environment were removed.
 - Added shared uv cache cleanup to complete cleanup and made missing-environment cleanup repeatable; verified artifact removal, repeated execution, and error propagation using isolated fixtures.
+- Checked the current recipes and documented the setup, combined activation, build, and camera launch sequence.
+- Fixed stale Homebrew OpenCV linkage by rebuilding native bindings; native setup now clears debug/release OpenCV artifacts, and the release build, six Python tests, and CLI help passed with Conda libraries.
+- Replaced box previews with a visible binary semantic mask and added q/Esc/window-close handling with GTK fallback; display/headless tests, Python tests, builds, and warning-free checks passed, while direct button/key verification was unavailable and native Wayland close reporting remains unsupported.
+- Changed display to a 30% red semantic-mask overlay on the camera image, preserving background pixels and binary API data; added partial/empty/full-mask and colour-boundary regression tests, updated documentation, and rebuilt both entry points.
+- Added independent camera and algorithm-input resolution controls in YAML, CLI, and Python, with resizing, algorithm-sized masks, aligned overlays, and early validation; release builds, display/headless Rust tests, 15 Python tests, and warning-free checks passed, while physical camera modes remain untested.
+- Fixed editor import resolution using the project `.venv`, packaged a Python interface stub, and adjusted runtime-introspection tests; basedpyright reports no import/type errors and all 15 Python tests pass, with strict typing warnings still present.
+- Rechecked the persistent editor import diagnostic: runtime imports and Zed's installed checker both resolve the extension; direct editor inspection was denied by computer-use permissions, so environment-selection and language-server restart steps were provided.
+- Confirmed both CLI resolution arguments are wired to capture and processing, clarified their help text and WIDTHxHEIGHT syntax, rebuilt the CLI, and passed all 14 CLI tests, formatting, and warning-free linting.
+- Modernized Python stub annotations to use unions with None, built-in tuple/dict types, and collections.abc.Callable; rebuilt the extension and passed type checking and all 15 Python tests.
+- Rebuilt deleted debug procedural-macro libraries using the pinned Conda compiler; workspace checks passed, the exact reported PyO3 macro artifact exists again, and editor restart recovery is documented.
+- Added effective resolution defaults to CLI help: camera-selected capture mode and 640x360 core processing with capture-sized masks when omitted; rebuilt help output and passed all 14 CLI tests and formatting.
+- Parallelized residual scoring, mask thresholding, and larger overlays with Rayon without unsafe code; verified deterministic outputs, display/headless Rust and Python tests, builds, and warning-free checks, measured 3–4x scoring gains but unchanged full-video timing, and identified dense flow as the dominant cost.
+- Added `config/default.yaml` as the CLI's runtime default configuration and `--config-path` selection, preserving legacy aliases and CLI precedence; removed the hardcoded CLI configuration fallback and documented file loading.
+- Completed configuration integration checks: default/custom files, aliases, paths outside the project, missing-file errors, and overrides passed alongside 61 Rust tests, 15 Python tests, builds, formatting, and warning-free CLI linting.
+- Unified YAML, Rust, CLI, and Python settings with concrete embedded defaults and exposed motion/tracking controls; verified partial overrides, validation, source-package defaults, display/headless builds, 81/73 Rust tests, 23 Python tests per build, formatting, and Clippy with warnings denied.
+- Documented every YAML setting and expanded CLI help with units, constraints, tuning significance, and accuracy/performance tradeoffs; verified CLI and configuration tests and formatting without changing runtime behavior.
+- Fixed the recurring missing Abseil wheel-build failure by clearing OpenCV artifacts linked to Homebrew and rebuilding against Conda; documented recovery and verified the full release build, Python import, and all 23 Python tests.
+- Profiled the 60 FPS target and optimized pyramid/buffer reuse and component scoring without lowering settings; identical fixture outputs improved about 38 to 40 FPS, with display/headless tests and warning-free Clippy passing; native DIS remains above the 16.7 ms budget and target-hardware throughput is unverified.
+- Changed CLI startup configuration output to indented, multiline formatting so each setting is readable separately.
+- Added always-on console FPS, weighted mask percentages, warnings and single error reporting, an FPS preview label, and flag-only CLI display; verified 91/82 Rust tests, 23 Python tests per build, warning-free Clippy, and finite-video console behavior.
+- Added literal none/info/debug logging modes across CLI, YAML, Rust and Python, with per-stream filtering and optional detailed diagnostics; verified display/headless tests, 29 Python tests per build, Clippy and real CLI output, and documented independent OpenCV backend messages.
+- Added shared requested camera FPS with a 30 FPS default across YAML, CLI, Rust and Python, backend negotiation warnings, and percentage-based reliability summaries without frame counts; release tests, warning-free linting and 35 Python tests passed, while physical camera negotiation remains unverified.
+- Fixed tests and resolution help tied to obsolete defaults, reproduced and handled the specific OpenCV degenerate epipolar-model assertion, and added sky/exposure recovery coverage; display/headless verification passed with warnings denied and 35 Python tests per build.
+- Investigated the reported slowdown: current 128×128 processing measured 275–283 FPS in the core benchmark and 248–252 FPS with file decoding and Python callbacks; info logging showed no measurable penalty, while live capture and display remain unmeasured.
+- Clarified that motion-test dimensions deliberately override only each test processor, preserving fixture geometry and IoU checks without changing YAML or application defaults.
+- Investigated the continued slowdown with live capture: at 256×256 the camera delivered 30 FPS for both 30 and 120 FPS requests, reporting 30 in both cases; capture-rate negotiation is separate from processing throughput.
+- Rechecked the reported 70 FPS baseline with the supplied video at 256×256: measured 68.3 FPS with the real preview enabled and 87.7 FPS headlessly, without changing algorithm settings or runtime configuration; the exact slower command/source remains unidentified.
+- Provided existing CLI overrides for relaxed camera-motion gates, one-frame confirmation, and disabled epipolar/morphological filtering; clarified that the eight-inlier ego-motion gate and single-component output still prevent a fully raw-flow mode.
+- Corrected current-frame mask coordinates and prediction-biased component selection, added sharp-reversal coverage and zero-frame COAST disabling across APIs, and moved reliability summaries to INFO with WARN restricted to debug; display/headless verification and 38 Python tests per build passed, with about 71 FPS measured in the 256×256 fixture preview.

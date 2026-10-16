@@ -9,6 +9,14 @@ const HEIGHT: i32 = 360;
 const TARGET_WIDTH: i32 = 40;
 const TARGET_HEIGHT: i32 = 28;
 
+fn params() -> Params {
+    Params {
+        w: WIDTH,
+        h: HEIGHT,
+        ..Params::default()
+    }
+}
+
 fn load_background() -> opencv::Result<core::Mat> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/gemini_generated_video_8813b1b0.mp4");
@@ -71,7 +79,10 @@ fn translated_frame(
 }
 
 fn assert_mask_contract(result: &ProcessingResult) {
-    assert_eq!((result.mask.width, result.mask.height), (640, 360));
+    assert_eq!(
+        (result.mask.width, result.mask.height),
+        (WIDTH as u32, HEIGHT as u32)
+    );
     assert_eq!(result.mask.data.len(), (WIDTH * HEIGHT) as usize);
     assert!(result.mask.data.iter().all(|value| *value <= 1));
 }
@@ -133,7 +144,7 @@ fn assert_localized(result: &ProcessingResult, expected: core::Rect, phase: &str
 fn global_translation_and_jitter_keep_false_mask_area_low() -> opencv::Result<()> {
     let background = load_background()?;
     let offsets = [(0, 0), (2, 1), (5, 0), (7, 2), (10, 1), (12, 3)];
-    let mut processor = OpticalFlowProcessor::new(Params::default())?;
+    let mut processor = OpticalFlowProcessor::new(params())?;
     let mut max_foreground = 0;
 
     for offset in offsets {
@@ -163,7 +174,7 @@ fn moving_patch_is_segmented_and_localized() -> opencv::Result<()> {
     let background = load_background()?;
     let patch = target_patch(&background)?;
     let offsets = [(0, 0), (2, 1), (5, 0), (7, 2), (10, 1), (12, 3)];
-    let mut processor = OpticalFlowProcessor::new(Params::default())?;
+    let mut processor = OpticalFlowProcessor::new(params())?;
     let mut last = None;
 
     for (index, offset) in offsets.into_iter().enumerate() {
@@ -186,6 +197,80 @@ fn moving_patch_is_segmented_and_localized() -> opencv::Result<()> {
 }
 
 #[test]
+fn abrupt_target_reversal_keeps_mask_on_current_position() -> opencv::Result<()> {
+    let background = load_background()?;
+    let patch = target_patch(&background)?;
+    let horizontal_motion = [0, 8, 16, 24, 32, 40, 24, 8];
+    let mut processor = OpticalFlowProcessor::new(params())?;
+
+    for (index, motion) in horizontal_motion.into_iter().enumerate() {
+        let target = core::Rect::new(145 + motion, 215, TARGET_WIDTH, TARGET_HEIGHT);
+        let frame = translated_frame(&background, (0, 0), Some((&patch, target)))?;
+        let result = processor
+            .process_frame(&frame)
+            .map_err(|message| opencv::Error::new(core::StsError, message))?;
+
+        if index >= 6 {
+            assert_localized(&result, target, "reversal", index);
+            assert!(
+                mask_iou(&result, target) >= 0.65,
+                "reversed target mask remained near its previous position"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn stable_target_does_not_expand_into_background() -> opencv::Result<()> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/gemini_generated_video_8813b1b0.mp4");
+    let mut capture = videoio::VideoCapture::from_file(path.to_str().unwrap(), videoio::CAP_ANY)?;
+    let mut processor = OpticalFlowProcessor::new(Params {
+        w: 256,
+        h: 256,
+        max_coast_frames: 120,
+        ..Params::default()
+    })?;
+    let mut image = core::Mat::default();
+    for index in 1..=130 {
+        assert!(capture.read(&mut image)? && !image.empty());
+        let frame = Frame {
+            data: image.data_bytes()?.to_vec(),
+            width: image.cols() as u32,
+            height: image.rows() as u32,
+        };
+        let result = processor.process_frame(&frame).unwrap();
+        if index % 10 == 0 {
+            println!("fixture frame {index}: {:?}, foreground={}", result.objects, result.mask.data.iter().filter(|&&pixel| pixel == 1).count());
+        }
+        let target_region = match index {
+            100 => core::Rect::new(75, 55, 120, 125),
+            130 => core::Rect::new(45, 65, 180, 90),
+            _ => continue,
+        };
+        let mut inside = 0;
+        let mut outside = 0;
+        for (pixel, &value) in result.mask.data.iter().enumerate() {
+            if value == 0 {
+                continue;
+            }
+            if target_region.contains(core::Point::new(pixel as i32 % 256, pixel as i32 / 256)) {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+        assert!(inside >= 12, "frame {index}: target mask disappeared");
+        assert!(
+            outside <= inside / 4,
+            "frame {index}: background takeover: inside={inside}, outside={outside}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn track_coasts_when_target_motion_temporarily_matches_background() -> opencv::Result<()> {
     let background = load_background()?;
     let patch = target_patch(&background)?;
@@ -203,7 +288,7 @@ fn track_coasts_when_target_motion_temporarily_matches_background() -> opencv::R
         (25, 4),
     ];
     let independent_motion = [0, 8, 16, 24, 32, 40, 40, 40, 40, 48, 56];
-    let mut processor = OpticalFlowProcessor::new(Params::default())?;
+    let mut processor = OpticalFlowProcessor::new(params())?;
 
     for (index, (offset, motion)) in offsets.into_iter().zip(independent_motion).enumerate() {
         let target = core::Rect::new(

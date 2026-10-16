@@ -25,3 +25,8 @@ test = [
 features = ["pyo3/extension-module"]
 module-name = "diff_motion"
 manifest-path = "crates/python/Cargo.toml"
+include = [{ path = "config/default.yaml", format = "sdist" }]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

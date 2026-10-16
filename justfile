@@ -15,6 +15,8 @@ setup: setup-conda setup-rust setup-python
 # Create or update the Conda environment with native dependencies and pinned Rust.
 setup-conda:
     conda env update --file environment.yml --prune
+    conda run --no-capture-output --name diff-motion cargo clean --package opencv
+    conda run --no-capture-output --name diff-motion cargo clean --release --package opencv
 
 # Prepare and check the pinned Conda Rust tools and fetch locked Cargo dependencies.
 setup-rust: setup-conda

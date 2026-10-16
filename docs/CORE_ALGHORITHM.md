@@ -161,6 +161,12 @@ for y in 0..hh { for x in 0..ww {
 
 `min(A, B)` is a soft AND: a pixel scores high only if it moves relative to the aligned background **and** violates epipolar geometry.
 
+DIS vectors are indexed in the aligned previous image. Before thresholding or component
+selection, relocate each score from `p` to its observed current position `q = p + flow(p)`.
+Apply tracker-gate decisions at `q`, where the current target is expected. Out-of-frame and
+non-finite destinations are discarded. This prevents displaying a previous-position mask
+over a moving target in the current frame.
+
 ---
 
 ## 6. Stage 4: Mask and bounding box
@@ -170,9 +176,9 @@ for y in 0..hh { for x in 0..ww {
 3. `connected_components_with_stats`. Drop components with area < `A_min`, extreme aspect ratio, or low solidity (thin parallax slivers).
 4. Select one component:
    - SEARCH: highest `sum(score)` over the component.
-   - LOCK: best IoU or distance to the Kalman prediction.
+   - LOCK: highest `sum(score)` among components inside the predicted association gate.
 5. Zero all other pixels. This is the binary mask.
-6. Bounding box from that component's stats, scaled back to full resolution.
+6. Bounding box from that component's stats in current processing-image coordinates.
 
 ---
 
@@ -194,6 +200,9 @@ A single-frame motion method cannot see (a). Handle it with state, not a lower t
 | COAST -> LOCK | strong blob overlaps the gate | Reacquire |
 
 Optional for slow relative motion: also compute residual flow against frame `t-k` (`k = 2..4`, ring buffer of aligned frames) and take the max score over baselines. A longer baseline multiplies displacement without changing noise.
+
+Set `max_coast_frames` to zero to disable mask propagation and clear the output when no
+associated motion is observed. Prediction still guides association of measured components.
 
 ---
 
@@ -228,10 +237,11 @@ if !ego.ok { reuse h_prev }
 prev_w = warp(prev, H); valid = warp(ones, H) eroded
 flow   = DIS(prev_w, curr)                        // Stage 2
 tau_a  = median + k*1.4826*MAD(|flow|)
-score  = fuse(|flow|/tau_a, sampson/tau_epi)      // Stage 3
+score  = fuse(|flow|/tau_a, sampson/tau_epi)      // Stage 3, at aligned previous pixels
+score  = project_to_current(score, flow)         // relocate to observed current pixels
 mask   = threshold -> open -> close -> 1 component // Stage 4
 state  = tracker.update(mask, H)                  // Stage 5
-bbox   = bbox(mask) scaled to full res
+bbox   = bbox(mask)                              // current processing-image coordinates
 prev   = curr
 ```
 

@@ -3,9 +3,6 @@ use std::collections::VecDeque;
 use crate::types::{BoundingBox, DetectedObject};
 use opencv::{core, imgproc, prelude::*, video, Result as CvResult};
 
-const MAX_COAST_FRAMES: u8 = 15;
-const MIN_CORRELATION: f64 = 0.5;
-
 #[derive(Clone, Copy, PartialEq)]
 enum TrackState {
     Search,
@@ -25,10 +22,15 @@ pub(super) struct Tracker {
     coast_frames: u8,
     candidate: Option<DetectedObject>,
     history: VecDeque<bool>,
+    confirmation_window: usize,
+    confirmation_hits: usize,
+    gate_scale: f32,
+    max_coast_frames: u8,
+    min_correlation: f64,
 }
 
 impl Tracker {
-    pub(super) fn new() -> CvResult<Self> {
+    pub(super) fn new(params: &crate::processor::Params) -> CvResult<Self> {
         let mut kalman = video::KalmanFilter::new(4, 2, 0, core::CV_32F)?;
 
         let mut transition = matrix(4, 4)?;
@@ -58,7 +60,12 @@ impl Tracker {
             homography: identity_homography(),
             coast_frames: 0,
             candidate: None,
-            history: VecDeque::with_capacity(5),
+            history: VecDeque::new(),
+            confirmation_window: params.confirmation_window,
+            confirmation_hits: params.confirmation_hits,
+            gate_scale: params.tracker_gate_scale,
+            max_coast_frames: params.max_coast_frames,
+            min_correlation: params.min_correlation,
         })
     }
 
@@ -124,13 +131,19 @@ impl Tracker {
             return None;
         }
         let bbox = self.bbox?;
+        let margin = (self.gate_scale - 1.0) / 2.0;
         let expanded = core::Rect2f::new(
-            bbox.x - bbox.width,
-            bbox.y - bbox.height,
-            bbox.width * 3.0,
-            bbox.height * 3.0,
+            bbox.x - bbox.width * margin,
+            bbox.y - bbox.height * margin,
+            bbox.width * self.gate_scale,
+            bbox.height * self.gate_scale,
         );
         clipped_rect(expanded, self.frame_size)
+    }
+
+    pub(super) fn feature_exclusion(&self) -> Option<core::Rect> {
+        self.bbox
+            .and_then(|bbox| clipped_rect(bbox, self.frame_size))
     }
 
     pub(super) fn update(
@@ -156,9 +169,11 @@ impl Tracker {
         match self.state {
             TrackState::Search => self.search(curr, mask, object, ego_ok),
             TrackState::Lock | TrackState::Coast => {
-                if let Some(object) = object {
-                    if self.associated(&object) {
-                        return self.lock(curr, mask, object).map(Some);
+                if ego_ok {
+                    if let Some(object) = object {
+                        if self.associated(&object) && self.appearance_matches(curr, &object)? {
+                            return self.lock(curr, mask, object).map(Some);
+                        }
                     }
                 }
                 self.coast(curr, mask)
@@ -197,14 +212,16 @@ impl Tracker {
             self.push_history(true);
         }
 
-        if self.history.iter().filter(|&&matched| matched).count() >= 3 {
+        if self.history.iter().filter(|&&matched| matched).count() >= self.confirmation_hits {
             self.initialize_filter(&object)?;
             self.state = TrackState::Lock;
             self.candidate = None;
             self.history.clear();
             self.save_lock_data(curr, mask, &object)?;
+            return Ok(Some(object));
         }
-        Ok(Some(object))
+        clear_mask(mask)?;
+        Ok(None)
     }
 
     fn lock(
@@ -232,7 +249,7 @@ impl Tracker {
         curr: &core::Mat,
         mask: &mut core::Mat,
     ) -> CvResult<Option<DetectedObject>> {
-        if self.coast_frames >= MAX_COAST_FRAMES {
+        if self.coast_frames >= self.max_coast_frames {
             self.reset();
             clear_mask(mask)?;
             return Ok(None);
@@ -270,7 +287,7 @@ impl Tracker {
             Some(&mut location),
             &core::no_array(),
         )?;
-        if !correlation.is_finite() || correlation < MIN_CORRELATION {
+        if !correlation.is_finite() || correlation < self.min_correlation {
             self.reset();
             clear_mask(mask)?;
             return Ok(None);
@@ -343,6 +360,46 @@ impl Tracker {
             && center.y < (gate.y + gate.height) as f32
     }
 
+    fn appearance_matches(&self, curr: &core::Mat, object: &DetectedObject) -> CvResult<bool> {
+        let Some(template) = self.template.as_ref() else {
+            return Ok(true);
+        };
+        let Some(rect) = object_rect(object, self.frame_size) else {
+            return Ok(false);
+        };
+        let crop = curr.roi(rect)?;
+        if !has_texture(&crop)? {
+            return Ok(false);
+        }
+
+        let mut resized = core::Mat::default();
+        imgproc::resize(
+            &crop,
+            &mut resized,
+            template.size()?,
+            0.0,
+            0.0,
+            imgproc::INTER_LINEAR,
+        )?;
+        let mut result = core::Mat::default();
+        imgproc::match_template_def(
+            &resized,
+            template,
+            &mut result,
+            imgproc::TM_CCOEFF_NORMED,
+        )?;
+        let mut correlation = 0.0;
+        core::min_max_loc(
+            &result,
+            None,
+            Some(&mut correlation),
+            None,
+            None,
+            &core::no_array(),
+        )?;
+        Ok(correlation.is_finite() && correlation >= self.min_correlation)
+    }
+
     fn save_lock_data(
         &mut self,
         curr: &core::Mat,
@@ -404,7 +461,7 @@ impl Tracker {
     }
 
     fn push_history(&mut self, matched: bool) {
-        if self.history.len() == 5 {
+        if self.history.len() == self.confirmation_window {
             self.history.pop_front();
         }
         self.history.push_back(matched);
@@ -584,7 +641,7 @@ mod tests {
 
     #[test]
     fn locks_only_after_three_consistent_good_ego_frames() -> CvResult<()> {
-        let mut tracker = Tracker::new()?;
+        let mut tracker = Tracker::new(&crate::processor::Params::default())?;
         let frame = textured_frame(core::Rect::new(12, 10, 8, 8))?;
 
         for _ in 0..3 {
@@ -596,23 +653,61 @@ mod tests {
         }
         assert!(tracker.gate().is_none());
 
-        for _ in 0..3 {
+        for index in 0..3 {
             let mut mask = object_mask(core::Rect::new(12, 10, 8, 8))?;
-            tracker.update(&frame, &mut mask, Some(object(12.0, 10.0)), true)?;
+            let tracked = tracker.update(&frame, &mut mask, Some(object(12.0, 10.0)), true)?;
+            if index < 2 {
+                assert!(tracked.is_none());
+                assert_eq!(core::count_non_zero(&mask)?, 0);
+            } else {
+                assert!(tracked.is_some());
+                assert_eq!(core::count_non_zero(&mask)?, 64);
+            }
         }
         assert!(tracker.gate().is_some());
         Ok(())
     }
 
     #[test]
+    fn disabled_coasting_keeps_observations_and_clears_missing_masks() -> CvResult<()> {
+        let params = crate::processor::Params {
+            confirmation_window: 1,
+            confirmation_hits: 1,
+            max_coast_frames: 0,
+            ..crate::processor::Params::default()
+        };
+        let mut tracker = Tracker::new(&params)?;
+        let rect = core::Rect::new(12, 10, 8, 8);
+        let frame = textured_frame(rect)?;
+        let mut mask = object_mask(rect)?;
+        tracker.update(&frame, &mut mask, Some(object(12.0, 10.0)), true)?;
+
+        let moved = core::Rect::new(16, 10, 8, 8);
+        let frame = textured_frame(moved)?;
+        tracker.predict(&identity_homography(), SIZE)?;
+        mask = object_mask(moved)?;
+        let observed = mask.data_bytes()?.to_vec();
+        let result = tracker.update(&frame, &mut mask, Some(object(16.0, 10.0)), true)?;
+        assert_eq!(result.unwrap().bbox.x, 16.0);
+        assert_eq!(mask.data_bytes()?, observed);
+
+        tracker.predict(&identity_homography(), SIZE)?;
+        assert!(tracker.update(&frame, &mut mask, None, true)?.is_none());
+        assert_eq!(core::count_non_zero(&mask)?, 0);
+        assert!(tracker.gate().is_none());
+        Ok(())
+    }
+
+    #[test]
     fn coasts_with_texture_and_expires_after_fifteen_frames() -> CvResult<()> {
         let mut tracker = locked_tracker()?;
+        let max_coast_frames = tracker.max_coast_frames;
         let current_rect = core::Rect::new(16, 10, 8, 8);
         let frame = textured_frame(current_rect)?;
         let translated = [1.0, 0.0, 2.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
         let identity = identity_homography();
 
-        for index in 0..MAX_COAST_FRAMES {
+        for index in 0..max_coast_frames {
             tracker.predict(if index == 0 { &translated } else { &identity }, SIZE)?;
             let mut mask = object_mask(core::Rect::new(12, 10, 8, 8))?;
             let tracked = tracker.update(&frame, &mut mask, None, true)?;
@@ -648,8 +743,93 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn unreliable_ego_coasts_instead_of_refreshing_from_motion() -> CvResult<()> {
+        let mut tracker = locked_tracker()?;
+        tracker.predict(&identity_homography(), SIZE)?;
+        let target = core::Rect::new(12, 10, 8, 8);
+        let frame = textured_frame(target)?;
+        let unrelated = core::Rect::new(4, 2, 24, 24);
+        let mut mask = object_mask(unrelated)?;
+        let unrelated_object = DetectedObject {
+            bbox: BoundingBox {
+                x: 4.0,
+                y: 2.0,
+                width: 24.0,
+                height: 24.0,
+            },
+            ..object(4.0, 2.0)
+        };
+
+        let tracked = tracker
+            .update(&frame, &mut mask, Some(unrelated_object), false)?
+            .expect("the existing target should coast through unreliable ego motion");
+
+        assert_eq!((tracked.bbox.x, tracked.bbox.y), (12.0, 10.0));
+        assert_eq!((tracked.bbox.width, tracked.bbox.height), (8.0, 8.0));
+        assert_eq!(mask_overlap(&mask, target)?, 64);
+        assert_eq!(core::count_non_zero(&mask)?, 64);
+        Ok(())
+    }
+
+    #[test]
+    fn different_appearance_inside_gate_coasts_on_the_existing_target() -> CvResult<()> {
+        let mut tracker = locked_tracker()?;
+        tracker.predict(&identity_homography(), SIZE)?;
+        let target = core::Rect::new(12, 10, 8, 8);
+        let distractor = core::Rect::new(20, 10, 8, 8);
+        let mut frame = textured_frame(target)?;
+        for y in distractor.y..distractor.y + distractor.height {
+            for x in distractor.x..distractor.x + distractor.width {
+                *frame.at_2d_mut::<u8>(y, x)? = if x % 2 == 0 { 40 } else { 220 };
+            }
+        }
+        let mut mask = object_mask(distractor)?;
+
+        let tracked = tracker
+            .update(&frame, &mut mask, Some(object(20.0, 10.0)), true)?
+            .expect("the existing target should be retained");
+
+        assert_eq!((tracked.bbox.x, tracked.bbox.y), (12.0, 10.0));
+        assert_eq!(mask_overlap(&mask, target)?, 64);
+        assert_eq!(core::count_non_zero(&mask)?, 64);
+        Ok(())
+    }
+
+    #[test]
+    fn feature_exclusion_uses_the_tracked_box_instead_of_the_gate() -> CvResult<()> {
+        let tracker = locked_tracker()?;
+
+        assert_eq!(tracker.gate(), Some(core::Rect::new(4, 2, 24, 24)));
+        assert_eq!(
+            tracker.feature_exclusion(),
+            Some(core::Rect::new(12, 10, 8, 8))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn confirmation_and_gate_settings_change_tracker_behavior() -> CvResult<()> {
+        let params = crate::processor::Params {
+            confirmation_window: 2,
+            confirmation_hits: 2,
+            tracker_gate_scale: 1.0,
+            ..crate::processor::Params::default()
+        };
+        let mut tracker = Tracker::new(&params)?;
+        let frame = textured_frame(core::Rect::new(12, 10, 8, 8))?;
+
+        for _ in 0..2 {
+            let mut mask = object_mask(core::Rect::new(12, 10, 8, 8))?;
+            tracker.update(&frame, &mut mask, Some(object(12.0, 10.0)), true)?;
+        }
+
+        assert_eq!(tracker.gate().unwrap().size(), core::Size::new(8, 8));
+        Ok(())
+    }
+
     fn locked_tracker() -> CvResult<Tracker> {
-        let mut tracker = Tracker::new()?;
+        let mut tracker = Tracker::new(&crate::processor::Params::default())?;
         let frame = textured_frame(core::Rect::new(12, 10, 8, 8))?;
         for _ in 0..3 {
             let mut mask = object_mask(core::Rect::new(12, 10, 8, 8))?;

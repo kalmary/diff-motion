@@ -6,6 +6,7 @@
 1. cli:
   2. config how algorithm should work
   3. another option is running with config.yaml file - argument is just path then
+  4. capture settings, including requested `fps` (default 30), are shared by YAML, CLI, Rust, and Python; camera support determines the delivered rate, and video files are not throttled
 
 2/3 importable packages rust and python get just video stream
 

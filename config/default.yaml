@@ -1,0 +1,101 @@
+# Start tuning input_resolution for speed, then tau_min/k_sigma for sensitivity.
+# Next adjust min_component_area and confirmation_hits for false detections.
+# Pixel distances and areas below refer to the processing image, not camera pixels.
+# Changing resolution therefore changes their physical meaning; retune on footage.
+algorithm_config:
+  # Algorithm selector; motion is the only implemented algorithm.
+  processing_type: motion
+  # Main speed/detail control and returned mask size. Higher sizes cost more work
+  # but preserve smaller targets; keep the capture aspect ratio to avoid stretching.
+  input_resolution:
+    width: 256
+    height: 256
+  # Maximum forward/backward feature-tracking disagreement (pixels).
+  # Lower rejects unreliable tracks more strictly but can leave too few features.
+  fb_max: 1.0
+  # Homography RANSAC inlier tolerance (pixels). Higher accepts noisier matches,
+  # potentially treating target motion as background motion.
+  ransac_h: 1.5
+  # Lower bound for the adaptive residual-motion threshold (pixels per frame).
+  # High-impact sensitivity control: lower detects weaker motion but more noise.
+  tau_min: 0.8
+  # Adaptive threshold = max(tau_min, median + k_sigma * robust noise estimate).
+  # Higher suppresses noisy background motion but may hide weak target motion.
+  k_sigma: 4.0
+  # Epipolar residual normalization (pixels), used when parallax is detected.
+  # Higher suppresses more epipolar residuals; has no effect without that model.
+  tau_epi: 1.0
+  # Feature-count limit for camera-motion estimation. More features can improve
+  # coverage but increase sparse optical-flow and model-fitting work.
+  max_corners: 400
+  # Minimum corner strength relative to the strongest corner, in (0, 1].
+  # Higher selects stronger/fewer features; too high can prevent motion estimation.
+  quality_level: 0.01
+  # Minimum spacing between feature corners (pixels). Higher spreads features out
+  # but reduces how many are available in small or low-texture scenes.
+  min_distance: 8.0
+  # Required homography inliers, from 8 to max_corners. Higher requires stronger
+  # evidence for camera motion; insufficient inliers prevent new detections.
+  min_inliers: 30
+  # Fraction of homography outliers above which an epipolar model is attempted.
+  # Lower activates parallax handling more often, adding model-fitting work.
+  parallax_threshold: 0.08
+  # DIS preset: ultrafast, fast, or medium. Presets trade computation for flow
+  # refinement; finest_scale below overrides the preset's finest pyramid level.
+  flow_preset: fast
+  # Finest flow pyramid level: 0 = full resolution; 1 = half, 2 = quarter, etc.
+  # High-impact speed/detail tradeoff: coarser levels can miss small targets.
+  finest_scale: 0
+  # Positive odd opening kernel width (pixels); 1 disables opening.
+  # Larger removes more isolated noise but can erase small/thin targets.
+  morphology_open_size: 3
+  # Positive odd closing kernel width (pixels); 1 disables closing.
+  # Larger fills gaps but may merge nearby foreground regions.
+  morphology_close_size: 5
+  # Minimum candidate component area (processing pixels squared).
+  # Higher rejects small blobs, including small or distant targets.
+  min_component_area: 12
+  # Dimensionless per-pixel score threshold outside a confirmed track's gate.
+  # Higher requires stronger motion evidence; confidence scores are not probabilities.
+  search_score_threshold: 1.0
+  # Per-pixel score threshold inside the tracking gate; must not exceed search.
+  # Lower retains weak target motion but admits more noise near the target.
+  tracking_score_threshold: 0.6
+  # Recent confirmation-history length (frames). Larger allows more intermittent
+  # detections to accumulate and can also preserve unrelated candidate history.
+  confirmation_window: 5
+  # Consistent detections required within the window, at most confirmation_window.
+  # Higher reduces accidental acquisition but requires more frames to confirm.
+  confirmation_hits: 3
+  # Width/height multiplier around the predicted target box; at least 1.
+  # Larger tolerates prediction error but admits more competing motion.
+  # Camera-motion feature selection excludes only the tracked box, not this gate.
+  tracker_gate_scale: 3.0
+  # Maximum consecutive template-propagated frames without a motion match.
+  # Zero disables propagation: masks are then returned only for motion observations.
+  # Larger bridges longer motion pauses but risks retaining a stale target.
+  max_coast_frames: 10
+  # Minimum template correlation in [-1, 1] for observations and coasting.
+  # Higher rejects appearance changes sooner; lower can switch to an unrelated patch.
+  min_correlation: 0.5
+# Headless avoids a window; Display adds a red mask overlay and rendering cost.
+# The CLI requires --display or --output-mode display to enable a window.
+# JsonCamera is reserved and currently rejected.
+output_mode: Headless
+# Console logging: none suppresses application logs; info shows FPS/mask summaries,
+# reliability and errors; debug also shows warnings, configuration and per-frame diagnostics.
+mode: info
+# Live camera device index (backend-dependent); ignored when video_path is set.
+camera_index: 0
+# Requested live-camera capture rate; the device must support it at the chosen
+# resolution. Unsupported or different reported rates produce a warning in debug mode.
+# Does not throttle processing or change video-file playback speed.
+fps: 30.0
+# File input overrides camera_index; null selects the live camera.
+video_path: null
+# Camera capture width/height mapping, or null for its native mode; ignored for files.
+# Lower capture sizes can reduce capture/transfer work but lose source detail.
+resolution: null
+# Preview-only width/height mapping, or null to match the captured frame.
+# Changes display work and window size, never algorithm or returned mask resolution.
+display_resolution: null
